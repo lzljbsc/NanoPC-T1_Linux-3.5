@@ -33,6 +33,14 @@
  * make sure that KERNEL_RAM_VADDR is correctly set.  Currently, we expect
  * the least significant 16 bits to be 0x8000, but we could probably
  * relax this restriction to KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000.
+ * swapper_pg_dir 是初始页表的虚拟地址。
+ * 我们将页表放置在 KERNEL_RAM_VADDR 下面 16K 处。因此，我们必须确保正确设置 
+ * KERNEL_RAM_VADDR。目前，我们期望最低有效的16位是 0x8000，但是我们可以将
+ * 这个限制放宽位 KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000 。
+ */
+/* KERNEL_RAM_VADDR kernel 在 RAM 中的虚拟地址 
+ * PAGE_OFFSET = 0xc0000000 在 arch/arm/include/asm/memory.h 定义
+ * TEXT_OFFSET = 0x8000 在 arch/arm/Makefile 中定义 
  */
 #define KERNEL_RAM_VADDR	(PAGE_OFFSET + TEXT_OFFSET)
 #if (KERNEL_RAM_VADDR & 0xffff) != 0x8000
@@ -80,6 +88,21 @@
  * We're trying to keep crap to a minimum; DO NOT add any machine specific
  * crap here - that's what the boot loader (or in extreme, well justified
  * circumstances, zImage) is for.
+ * 内核启动的入口， stext 在 arch/arm/kernel/vmlinux.lds.S 中定义
+ * 
+ * 这里通常是从解压程序代码中调用的。
+ * 要求 : MMU = off, D-cache = off, I-cache = dont care, r0 = 0, 
+ *        r1 = machine nr, r2 = atags or dtb pointer. 
+ * 这里就确认了，从 uboot 跳转到 内核时， mmu 必须是关闭的，（不对啊，好像
+ * 在解压代码中关闭也可以啊。。。）传递的三个参数 0  machid  atags 
+ * 
+ * 这个代码大部分是与位置无关的，因此，如果将内核链接到 0xc0008000, 则调用
+ * __pa(0xc0008000).
+ *
+ * machine number 在 arch/arm/tools/mach-types 中
+ * 
+ * 试图将垃圾代码降到最低；不要在这里添加任何特定于机器的垃圾代码——这里就是引导
+ * 加载程序的作用。
  */
 	.arm
 
@@ -116,6 +139,9 @@ ENTRY(stext)
 	ldr	r8, =PHYS_OFFSET		@ always constant in this case
 #endif
 
+    /* PHYS_OFFSET 在 arch/arm/include/asm/memory.h 中定义，是
+     * 物理内存起始的偏移地址，这个是与平台相关的，由 PLAT_PHYS_OFFSET 
+     * 或 CONFIG_PHYS_OFFSET 定义
 	/*
 	 * r1 = machine no, r2 = atags or dtb,
 	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
@@ -136,6 +162,7 @@ ENTRY(stext)
 	 * above.  On return, the CPU will be ready for the MMU to be
 	 * turned on, and r0 will hold the CPU control register value.
 	 */
+    /* __mmap_switched 是启动 mmu 后调用的 在 __enable_mmu 中处理 */
 	ldr	r13, =__mmap_switched		@ address to jump to after
 						@ mmu has been enabled
 	adr	lr, BSYM(1f)			@ return (PIC) address
@@ -155,6 +182,7 @@ ENDPROC(stext)
  * Setup the initial page tables.  We only setup the barest
  * amount which are required to get the kernel running, which
  * generally means mapping in the kernel code.
+ * 设置初始页表。只设置内核运行所需的最少量的东西。
  *
  * r8 = phys_offset, r9 = cpuid, r10 = procinfo
  *

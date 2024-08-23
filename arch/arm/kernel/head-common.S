@@ -71,6 +71,8 @@ ENDPROC(__vet_atags)
  * The following fragment of code is executed with the MMU on in MMU mode,
  * and uses absolute addresses; this is not position independent.
  *
+ * 下面的代码是在MMU模式下运行的，并使用的绝对地址，并不是位置无关代码。
+ * 
  *  r0  = cp#15 control register
  *  r1  = machine ID
  *  r2  = atags/dtb pointer
