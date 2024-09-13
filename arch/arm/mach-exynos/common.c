@@ -19,9 +19,11 @@
 #include <linux/serial_core.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
+#include <linux/of_platform.h>
 #include <linux/export.h>
 #include <linux/irqdomain.h>
 #include <linux/of_address.h>
+#include <linux/delay.h>
 
 #include <asm/proc-fns.h>
 #include <asm/exception.h>
@@ -35,6 +37,7 @@
 #include <mach/regs-pmu.h>
 #include <mach/regs-gpio.h>
 #include <mach/pmu.h>
+#include <mach/smc.h>
 
 #include <plat/cpu.h>
 #include <plat/clock.h>
@@ -179,6 +182,31 @@ static struct map_desc exynos4_iodesc[] __initdata = {
 		.length		= SZ_4K,
 		.type		= MT_DEVICE,
 	}, {
+		.virtual	= (unsigned long)S3C_VA_USB_HSPHY,
+		.pfn		= __phys_to_pfn(EXYNOS4_PA_HSPHY),
+		.length		= SZ_4K,
+		.type		= MT_DEVICE,
+    }, {
+        .virtual    = (unsigned long)S5P_VA_GPIO1,
+        .pfn        = __phys_to_pfn(EXYNOS4_PA_GPIO1),
+        .length     = SZ_4K,
+        .type       = MT_DEVICE,
+    }, {
+        .virtual    = (unsigned long)S5P_VA_GPIO2,
+        .pfn        = __phys_to_pfn(EXYNOS4_PA_GPIO2),
+        .length     = SZ_4K,
+        .type       = MT_DEVICE,
+    }, {
+        .virtual    = (unsigned long)S5P_VA_GPIO3,
+        .pfn        = __phys_to_pfn(EXYNOS4_PA_GPIO3),
+        .length     = SZ_256,
+        .type       = MT_DEVICE,
+	}, {
+		.virtual    = (unsigned long)S5P_VA_AUDSS,
+		.pfn        = __phys_to_pfn(EXYNOS4_PA_AUDSS),
+		.length     = SZ_4K,
+		.type       = MT_DEVICE,
+    }, {
 		.virtual	= (unsigned long)S5P_VA_DMC0,
 		.pfn		= __phys_to_pfn(EXYNOS4_PA_DMC0),
 		.length		= SZ_64K,
@@ -187,11 +215,6 @@ static struct map_desc exynos4_iodesc[] __initdata = {
 		.virtual	= (unsigned long)S5P_VA_DMC1,
 		.pfn		= __phys_to_pfn(EXYNOS4_PA_DMC1),
 		.length		= SZ_64K,
-		.type		= MT_DEVICE,
-	}, {
-		.virtual	= (unsigned long)S3C_VA_USB_HSPHY,
-		.pfn		= __phys_to_pfn(EXYNOS4_PA_HSPHY),
-		.length		= SZ_4K,
 		.type		= MT_DEVICE,
 	},
 };
@@ -301,6 +324,10 @@ void __init exynos_init_late(void)
 
 void __init exynos_init_io(struct map_desc *mach_desc, int size)
 {
+    /* 参数 mach_desc = NULL, 
+     * 第一个 iotable_init 调用时， exynos_iodesc 只是 chipid 
+     * 的映射关系， exynos_iodesc 是所有 exynos 系列都支持的寄存器映射 
+     * 也是为下面 s5p_init_cpu 中读取 chipid 做准备 */
 	/* initialize the io descriptors we need for initialization */
 	iotable_init(exynos_iodesc, ARRAY_SIZE(exynos_iodesc));
 	if (mach_desc)
@@ -891,6 +918,7 @@ static int exynos_irq_eint_set_type(struct irq_data *data, unsigned int type)
 	int shift;
 	u32 ctrl, mask;
 	u32 newvalue = 0;
+	struct irq_desc *desc = irq_to_desc(data->irq);
 
 	switch (type) {
 	case IRQ_TYPE_EDGE_RISING:
@@ -932,6 +960,11 @@ static int exynos_irq_eint_set_type(struct irq_data *data, unsigned int type)
 		s3c_gpio_cfgpin(exynos5_irq_to_gpio(data->irq), S3C_GPIO_SFN(0xf));
 	else
 		s3c_gpio_cfgpin(exynos4_irq_to_gpio(data->irq), S3C_GPIO_SFN(0xf));
+
+	if (type & IRQ_TYPE_EDGE_BOTH)
+		desc->handle_irq = handle_edge_irq;
+	else
+		desc->handle_irq = handle_level_irq;
 
 	return 0;
 }

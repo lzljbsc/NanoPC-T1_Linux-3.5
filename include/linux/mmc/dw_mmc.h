@@ -125,6 +125,8 @@ struct dw_mci {
 	struct mmc_request	*mrq;
 	struct mmc_command	*cmd;
 	struct mmc_data		*data;
+    struct clk      *hclk;
+    struct clk      *cclk;
 	struct workqueue_struct	*card_workqueue;
 
 	/* DMA interface members*/
@@ -237,6 +239,8 @@ struct dw_mci_board {
 	int (*get_cd)(u32 slot_id);
 	int (*get_ocr)(u32 slot_id);
 	int (*get_bus_wd)(u32 slot_id);
+    void (*set_io_timing)(void *data, unsigned char timing);
+
 	/*
 	 * Enable power to selected slot and set voltage to desired level.
 	 * Voltage levels are specified using MMC_VDD_xxx defines defined

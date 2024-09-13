@@ -215,6 +215,17 @@ static int exynos4_clk_dac_ctrl(struct clk *clk, int enable)
 
 /* Core list of CMU_CPU side */
 
+/* 这部分是 CMU_CPU 部分的时钟设置 
+ * mout_apll 是经过 APLL 之后的时钟，并且是作为后续时钟源的
+ * 对应到手册上，就是时钟的 MOUT_APLL mux 的输出 
+ * .sources 所对应的资源，就是 mux 对应的输入 
+ * 可以这样理解： clksrc_clk 中所定义的 clk .name 是一个新的时钟，
+ * 那这个时钟来源于哪里呢，就是 .sources 所对应的 mux 
+ * .sources 中有几个 clk ，那就可以从其中选择一个作为新定义的这个
+ * 时钟的输出源  
+ * .reg_src 就是用于设置选择哪个 .sources 的 
+ * 如果 clk 结构中有 .parent ，那就是指定了它的父，也就是上级时钟源 
+ * .reg_div 对应的是 DIV 模块，用于分频的 */
 static struct clksrc_clk exynos4_clk_mout_apll = {
 	.clk	= {
 		.name		= "mout_apll",
@@ -234,14 +245,20 @@ static struct clksrc_clk exynos4_clk_sclk_apll = {
 static struct clksrc_clk exynos4_clk_mout_epll = {
 	.clk	= {
 		.name		= "mout_epll",
+        .parent     = &clk_fout_epll,
 	},
 	.sources = &clk_src_epll,
 	.reg_src = { .reg = EXYNOS4_CLKSRC_TOP0, .shift = 4, .size = 1 },
 };
 
+/* "mout_mpll" 这个时钟比较特殊，它与 APLL 是同一个配置，没有自己的配置寄存器
+ * 所以这里的配置中，忽略了 .reg_src 选项（没有配置，也可以把 "mout_apll" 
+ * 的 .reg_src 填过来 )
+ * 它的上级时钟，可以选择的，所以使用 .parent 指定了上级时钟 */
 struct clksrc_clk exynos4_clk_mout_mpll = {
 	.clk	= {
 		.name		= "mout_mpll",
+        .parent     = &clk_fout_mpll,
 	},
 	.sources = &clk_src_mpll,
 
@@ -258,6 +275,9 @@ static struct clksrc_sources exynos4_clkset_moutcore = {
 	.nr_sources	= ARRAY_SIZE(exynos4_clkset_moutcore_list),
 };
 
+/* "moutcore" 对应到手册中是 CMU_CPU 中的 MOUTcore 所输出的时钟
+ * 可以选择从 apll 还是 mpll 中获取
+ * 这个时钟也是 CPU核心的时钟源，核心时钟都是从这个时钟分出来的 */
 static struct clksrc_clk exynos4_clk_moutcore = {
 	.clk	= {
 		.name		= "moutcore",
@@ -266,6 +286,10 @@ static struct clksrc_clk exynos4_clk_moutcore = {
 	.reg_src = { .reg = EXYNOS4_CLKSRC_CPU, .shift = 16, .size = 1 },
 };
 
+/* "core_clk" 对应到手册中是 CMU_CPU 中的 DIVcore 所输出的时钟
+ * 根据手册，这里是有两个DIV的，用于将 moutcore 分频的 
+ * 但下面的代码中，只使用了 DIVcore 这一个 DIV 
+ * 这里和手册中不太一样 */
 static struct clksrc_clk exynos4_clk_coreclk = {
 	.clk	= {
 		.name		= "core_clk",
@@ -281,6 +305,9 @@ static struct clksrc_clk exynos4_clk_armclk = {
 	},
 };
 
+/* aclk_corem0 和 aclk_cores 设置的 .reg_div 是一样的
+ * 在手册中并没有 aclk_cores 单独的 DIV
+ * */
 static struct clksrc_clk exynos4_clk_aclk_corem0 = {
 	.clk	= {
 		.name		= "aclk_corem0",
@@ -315,6 +342,8 @@ static struct clksrc_clk exynos4_clk_periphclk = {
 
 /* Core list of CMU_CORE side */
 
+/* 这部分对应的是 CMU_DMC 时钟 
+ * "mout_corebus" 对应手册中的 MOUTdmc_bus 时钟 */
 static struct clk *exynos4_clkset_corebus_list[] = {
 	[0] = &exynos4_clk_mout_mpll.clk,
 	[1] = &exynos4_clk_sclk_apll.clk,
@@ -421,6 +450,9 @@ struct clksrc_clk exynos4_clk_aclk_133 = {
 	.reg_div = { .reg = EXYNOS4_CLKDIV_TOP, .shift = 12, .size = 3 },
 };
 
+/* "vpll_src" 这个 clk ，按照下面的代码，是设置 vpll 的源
+ * 但根据手册 vpll 是没有这个源的， EXYNOS4_CLKSRC_TOP1 这个寄存器中，
+ * bit0 也是保留项，无需设置的 */
 static struct clk *exynos4_clkset_vpllsrc_list[] = {
 	[0] = &clk_fin_vpll,
 	[1] = &exynos4_clk_sclk_hdmi27m,
@@ -441,6 +473,10 @@ static struct clksrc_clk exynos4_clk_vpllsrc = {
 	.reg_src = { .reg = EXYNOS4_CLKSRC_TOP1, .shift = 0, .size = 1 },
 };
 
+/* 这里设置的是 "sclk_vpll" 的时钟 mux 
+ * 根据手册中框图， SCLK-VPLL 只有两个来源， fin_vpll 和 fout_vpll
+ * 这里的设置应该是有误的，
+ * 但是，VPLL，都会设置从 fout_vpll 中获得，所以这里并不会出错 */
 static struct clk *exynos4_clkset_sclk_vpll_list[] = {
 	[0] = &exynos4_clk_vpllsrc.clk,
 	[1] = &clk_fout_vpll,

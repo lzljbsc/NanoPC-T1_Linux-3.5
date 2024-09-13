@@ -791,6 +791,9 @@ static void dw_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	mci_writel(slot->host, UHS_REG, regs);
 
+    if (slot->host->pdata->set_io_timing)
+        slot->host->pdata->set_io_timing(slot->host, ios->timing);
+
 	if (ios->clock) {
 		/*
 		 * Use mirror of ios->clock to prevent race with mmc
@@ -1946,6 +1949,10 @@ int dw_mci_probe(struct dw_mci *host)
 			"Platform data must supply bus speed\n");
 		return -ENODEV;
 	}
+
+    /* Platform data init function */
+    if (host->pdata->init(host->pdata->num_slots, NULL, host))
+        return -ENODEV;
 
 	host->bus_hz = host->pdata->bus_hz;
 	host->quirks = host->pdata->quirks;

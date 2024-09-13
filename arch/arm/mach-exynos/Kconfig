@@ -393,6 +393,12 @@ config MACH_SMDK4412
 config MACH_NANOPC_T1
     bool "NANOPC_T1"
     select SOC_EXYNOS4412
+    select S5P_GPIO_INT
+    select EXYNOS4_SETUP_SDHCI
+    select EXYNOS4_DEV_DWMCI
+    select S3C_DEV_HSMMC2
+    select S3C_DEV_HSMMC3
+    select S5P_DEV_FIMD0
     help
       Machine support for FriendlyARM NanoPC-T1
 endif

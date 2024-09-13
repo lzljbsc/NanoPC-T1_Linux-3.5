@@ -14,6 +14,7 @@
 #ifndef __ASM_PLAT_MAP_H
 #define __ASM_PLAT_MAP_H __FILE__
 
+/* 将所有的寄存器都放在 0xF6000000 以上的位置 */
 /* Fit all our registers in at 0xF6000000 upwards, trying to use as
  * little of the VA space as possible so vmalloc and friends have a
  * better chance of getting memory.
