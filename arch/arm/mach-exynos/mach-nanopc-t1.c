@@ -20,6 +20,7 @@
 #include <linux/regulator/machine.h>
 #include <linux/serial_core.h>
 #include <linux/clk.h>
+#include <linux/leds.h>
 
 #include <asm/mach/arch.h>
 #include <asm/hardware/gic.h>
@@ -120,54 +121,6 @@ static void __init smdk4x12_init_early(void)
 
     s3c24xx_init_clocks(clk_xusbxti.rate);
     s3c24xx_init_uarts(smdk4x12_uartcfgs, ARRAY_SIZE(smdk4x12_uartcfgs));
-}
-
-static void __init exynos_bootdev_init(void)
-{
-    /* 启动设备，已经在 uboot中检测，并存放在了 INFORM3 寄存器中 */
-    exynos_boot_dev = __raw_readl(S5P_INFORM3);
-
-    if (is_bootfrom_emmc()) {
-        printk(KERN_INFO "boot from emmc\n");
-    } else if (is_bootfrom_sd()) {
-        printk(KERN_INFO "boot from sd\n");
-    } else {
-        /* oops...should never fly to here */
-        printk(KERN_ERR "Unknown boot device\n");
-    }
-}
-
-static void __init nanopc_t1_hwrev_init(void)
-{
-    struct gpio hw_rev_gpios[] = {
-        { EXYNOS4_GPM3(5), GPIOF_IN, "hw_rev0" },
-        { EXYNOS4_GPM3(6), GPIOF_IN, "hw_rev1" },
-        { EXYNOS4_GPM3(7), GPIOF_IN, "hw_rev2" },
-    };
-
-    int i, ret;
-
-    ret = gpio_request_array(hw_rev_gpios, ARRAY_SIZE(hw_rev_gpios));
-    BUG_ON(ret);
-
-    for (i = 0; i < ARRAY_SIZE(hw_rev_gpios); i++)
-        nanopc_t1_hw_rev |= gpio_get_value(hw_rev_gpios[i].gpio) << i;
-
-    printk("NanoPC T1 HW revision: %d\n", nanopc_t1_hw_rev);
-}
-
-static void smdk4x12_pmu_wdt_init(void)
-{
-    unsigned int value = 0;
-
-    if (soc_is_exynos4212() || soc_is_exynos4412()) {
-        value = __raw_readl(S5P_AUTOMATIC_WDT_RESET_DISABLE);
-        value &= ~S5P_SYS_WDTRESET;
-        __raw_writel(value, S5P_AUTOMATIC_WDT_RESET_DISABLE);
-        value = __raw_readl(S5P_MASK_WDT_RESET_REQUEST);
-        value &= ~S5P_SYS_WDTRESET;
-        __raw_writel(value, S5P_MASK_WDT_RESET_REQUEST);
-    }
 }
 
 #ifdef CONFIG_EXYNOS4_DEV_DWMCI
@@ -283,11 +236,106 @@ static struct dw_mci_board exynos_dwmci_pdata __initdata = {
 };
 #endif
 
+static const struct gpio_led nanopc_t1_leds[] __initconst = {
+    {
+        .name               = "sys",
+        .default_trigger    = "heartbeat",
+        .gpio               = EXYNOS4_GPM4(0),
+        .active_low         = 1,
+        .default_state      = LEDS_GPIO_DEFSTATE_OFF,
+    },
+    {
+        .name               = "mmcblk0",
+        .default_trigger    = "mmc1",
+        .gpio               = EXYNOS4_GPM4(1),
+        .active_low         = 1,
+        .default_state      = LEDS_GPIO_DEFSTATE_OFF,
+    },
+};
+
+static const struct gpio_led_platform_data nanopc_t1_leds_data __initconst = {
+    .num_leds           = ARRAY_SIZE(nanopc_t1_leds),
+    .leds               = nanopc_t1_leds,
+};
+
+#ifdef CONFIG_S3C_DEV_HSMMC2
+static struct s3c_sdhci_platdata smdk4x12_hsmmc2_pdata __initdata = {
+    .cd_type        = S3C_SDHCI_CD_INTERNAL,
+};
+#endif
+
 static struct platform_device *smdk4x12_devices[] __initdata = {
 #ifdef CONFIG_EXYNOS4_DEV_DWMCI
     &exynos4_device_dwmci,
 #endif
+
+#ifdef CONFIG_S3C_DEV_HSMMC2
+    &s3c_device_hsmmc2,
+#endif
+
+#ifdef CONFIG_S3C_DEV_RTC
+    &s3c_device_rtc,
+#endif
+
+#ifdef CONFIG_S3C_DEV_WDT 
+    &s3c_device_wdt,
+#endif
 };
+
+static void __init exynos_bootdev_init(void)
+{
+    /* 启动设备，已经在 uboot中检测，并存放在了 INFORM3 寄存器中 */
+    exynos_boot_dev = __raw_readl(S5P_INFORM3);
+
+    if (is_bootfrom_emmc()) {
+#ifdef CONFIG_EXYNOS4_DEV_DWMCI
+        printk(KERN_INFO "Boot from emmc\n");
+        exynos_dwmci_pdata.caps2 |= MMC_CAP2_BOOT_DEVICE;
+#endif
+    } else if (is_bootfrom_sd()) {
+#ifdef CONFIG_S3C_DEV_HSMMC2
+        printk(KERN_INFO "Boot from sd\n");
+        smdk4x12_hsmmc2_pdata.host_caps2 |= MMC_CAP2_BOOT_DEVICE;
+#endif
+    } else {
+        /* oops...should never fly to here */
+        printk(KERN_ERR "Unknown boot device\n");
+        while (1);
+    }
+}
+
+static void __init nanopc_t1_hwrev_init(void)
+{
+    struct gpio hw_rev_gpios[] = {
+        { EXYNOS4_GPM3(5), GPIOF_IN, "hw_rev0" },
+        { EXYNOS4_GPM3(6), GPIOF_IN, "hw_rev1" },
+        { EXYNOS4_GPM3(7), GPIOF_IN, "hw_rev2" },
+    };
+
+    int i, ret;
+
+    ret = gpio_request_array(hw_rev_gpios, ARRAY_SIZE(hw_rev_gpios));
+    BUG_ON(ret);
+
+    for (i = 0; i < ARRAY_SIZE(hw_rev_gpios); i++)
+        nanopc_t1_hw_rev |= gpio_get_value(hw_rev_gpios[i].gpio) << i;
+
+    printk("NanoPC T1 HW revision: %d\n", nanopc_t1_hw_rev);
+}
+
+static void smdk4x12_pmu_wdt_init(void)
+{
+    unsigned int value = 0;
+
+    if (soc_is_exynos4212() || soc_is_exynos4412()) {
+        value = __raw_readl(S5P_AUTOMATIC_WDT_RESET_DISABLE);
+        value &= ~S5P_SYS_WDTRESET;
+        __raw_writel(value, S5P_AUTOMATIC_WDT_RESET_DISABLE);
+        value = __raw_readl(S5P_MASK_WDT_RESET_REQUEST);
+        value &= ~S5P_SYS_WDTRESET;
+        __raw_writel(value, S5P_MASK_WDT_RESET_REQUEST);
+    }
+}
 
 static void __init smdk4x12_init_machine(void)
 {
@@ -296,11 +344,19 @@ static void __init smdk4x12_init_machine(void)
 
     smdk4x12_pmu_wdt_init();
 
+    gpio_led_register_device(-1, &nanopc_t1_leds_data);
+
 #ifdef CONFIG_EXYNOS4_DEV_DWMCI
     exynos4_dwmci_set_platdata(&exynos_dwmci_pdata);
 #endif
 
+#ifdef CONFIG_S3C_DEV_HSMMC2
+    s3c_sdhci2_set_platdata(&smdk4x12_hsmmc2_pdata);
+#endif
+
     platform_add_devices(smdk4x12_devices, ARRAY_SIZE(smdk4x12_devices));
+
+    return;
 }
 
 MACHINE_START(NANOPC_T1, "NANOPC-T1")

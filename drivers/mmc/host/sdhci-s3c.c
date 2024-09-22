@@ -716,7 +716,7 @@ static const struct dev_pm_ops sdhci_s3c_pmops = {
 #define SDHCI_S3C_PMOPS NULL
 #endif
 
-#if defined(CONFIG_CPU_EXYNOS4210) || defined(CONFIG_SOC_EXYNOS4212)
+#if defined(CONFIG_CPU_EXYNOS4210) || defined(CONFIG_SOC_EXYNOS4212) || defined(CONFIG_SOC_EXYNOS4412)
 static struct sdhci_s3c_drv_data exynos4_sdhci_drv_data = {
 	.sdhci_quirks = SDHCI_QUIRK_NONSTANDARD_CLOCK,
 };
