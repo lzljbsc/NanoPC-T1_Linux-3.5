@@ -394,12 +394,15 @@ config MACH_NANOPC_T1
     bool "NANOPC_T1"
     select SOC_EXYNOS4412
     select S5P_GPIO_INT
-    select EXYNOS4_SETUP_SDHCI
-    select EXYNOS4_DEV_DWMCI
-    select EXYNOS4_DEV_DMA
-    select S3C_DEV_HSMMC2
     select S3C_DEV_RTC
     select S3C_DEV_WDT
+    select S3C_DEV_HSMMC2
+    select S5P_DEV_USB_EHCI
+    select EXYNOS4_DEV_DMA
+    select EXYNOS4_DEV_DWMCI
+    select EXYNOS4_DEV_USB_OHCI
+    select EXYNOS4_SETUP_SDHCI
+    select EXYNOS4_SETUP_USB_PHY
     select LEDS_GPIO_REGISTER
     help
       Machine support for FriendlyARM NanoPC-T1

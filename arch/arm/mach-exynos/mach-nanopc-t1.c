@@ -21,6 +21,7 @@
 #include <linux/serial_core.h>
 #include <linux/clk.h>
 #include <linux/leds.h>
+#include <linux/delay.h>
 
 #include <asm/mach/arch.h>
 #include <asm/hardware/gic.h>
@@ -36,13 +37,16 @@
 #include <plat/mfc.h>
 #include <plat/regs-serial.h>
 #include <plat/sdhci.h>
+#include <plat/ehci.h>
+
+#include <mach/map.h>
+#include <mach/regs-pmu.h>
 
 #ifdef CONFIG_EXYNOS4_DEV_DWMCI
 #include <mach/dwmci.h>
 #endif
 
-#include <mach/map.h>
-#include <mach/regs-pmu.h>
+#include <mach/ohci.h>
 
 #include "common.h"
 
@@ -264,6 +268,41 @@ static struct s3c_sdhci_platdata smdk4x12_hsmmc2_pdata __initdata = {
 };
 #endif
 
+#ifdef CONFIG_S5P_DEV_USB_EHCI
+/* USB EHCI */
+static struct s5p_ehci_platdata smdk4x12_ehci_pdata;
+
+static void __init smdk4x12_ehci_init(void)
+{
+    struct s5p_ehci_platdata *pdata = &smdk4x12_ehci_pdata;
+
+    s5p_ehci_set_platdata(pdata);
+
+#define GPIO_USBH_RESET                 EXYNOS4_GPM2(4)
+    if (gpio_request_one(GPIO_USBH_RESET, GPIOF_OUT_INIT_HIGH, "USBH_RESET")) {
+        pr_err("failed to request GPM2_4 for USB reset control\n");
+        return;
+    }
+
+    s3c_gpio_setpull(GPIO_USBH_RESET, S3C_GPIO_PULL_UP);
+    gpio_set_value(GPIO_USBH_RESET, 0);
+    mdelay(1);
+    gpio_set_value(GPIO_USBH_RESET, 1);
+    //gpio_free(GPIO_USBH_RESET);
+}
+#endif
+
+#ifdef CONFIG_EXYNOS4_DEV_USB_OHCI
+/* USB OHCI */
+static struct exynos4_ohci_platdata smdk4x12_ohci_pdata;
+
+static void __init smdk4x12_ohci_init(void)
+{
+    struct exynos4_ohci_platdata *pdata = &smdk4x12_ohci_pdata;
+    exynos4_ohci_set_platdata(pdata);
+}
+#endif
+
 static struct platform_device *smdk4x12_devices[] __initdata = {
 #ifdef CONFIG_EXYNOS4_DEV_DWMCI
     &exynos4_device_dwmci,
@@ -279,6 +318,14 @@ static struct platform_device *smdk4x12_devices[] __initdata = {
 
 #ifdef CONFIG_S3C_DEV_WDT 
     &s3c_device_wdt,
+#endif
+
+#ifdef CONFIG_S5P_DEV_USB_EHCI
+    &s5p_device_ehci,
+#endif
+
+#ifdef CONFIG_EXYNOS4_DEV_USB_OHCI
+    &exynos4_device_ohci,
 #endif
 };
 
@@ -352,6 +399,14 @@ static void __init smdk4x12_init_machine(void)
 
 #ifdef CONFIG_S3C_DEV_HSMMC2
     s3c_sdhci2_set_platdata(&smdk4x12_hsmmc2_pdata);
+#endif
+
+#ifdef CONFIG_S5P_DEV_USB_EHCI
+    smdk4x12_ehci_init();
+#endif
+
+#ifdef CONFIG_EXYNOS4_DEV_USB_OHCI
+    smdk4x12_ohci_init();
 #endif
 
     platform_add_devices(smdk4x12_devices, ARRAY_SIZE(smdk4x12_devices));
