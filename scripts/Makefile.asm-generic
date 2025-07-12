@@ -1,0 +1,42 @@
+# include/asm-generic contains a lot of files that are used
+# verbatim by several architectures.
+#
+# This Makefile reads the file arch/$(SRCARCH)/include/asm/Kbuild
+# and for each file listed in this file with generic-y creates
+# a small wrapper file in $(obj) (arch/$(SRCARCH)/include/generated/asm)
+
+# 直接包含了 arch/$(SRCARCH)/include/asm/Kbuild
+# 在此代码中，并没有这个文件，但在官方的 linux-3.0.15 代码中是有的
+# 这里使用的 -include ，没有这个文件也不会报错
+# 这个文件中可能包含 include/asm-generic/Kbuild.asm 文件，该文件中定义了一些通用
+# 的头文件 header-y
+# 在官方的 linux-3.0.15 中， 两个 Kbuild 中都定义的 header-y ，如：
+# header-y += hwcap.h
+# 但是，在下面的处理中，使用的是 generic-y , 所以在该版本的内核中， 本文件中的处
+# 理是无效的
+kbuild-file := $(srctree)/arch/$(SRCARCH)/include/asm/Kbuild
+-include $(kbuild-file)
+
+include scripts/Kbuild.include
+
+# 创建目标输出目录
+# Create output directory if not already present
+_dummy := $(shell [ -d $(obj) ] || mkdir -p $(obj))
+
+# 具体的处理命令
+# 对于 include/asm-generic/ 中的头文件，会在 arch/$(ARCH)/include/generated/asm
+# 目录中，生成一个同名的头文件
+# 如 local.h 头文件，内容如下
+# #include <asm-generic/local.h>
+quiet_cmd_wrap = WRAP    $@
+cmd_wrap = echo "\#include <asm-generic/$*.h>" >$@
+
+# 默认的构建目标，依赖是 generic-y 中所有的文件
+# generic-y 全部都是 .h 文件，所有规则会匹配到下面的 $(obj)/%.h:
+all: $(patsubst %, $(obj)/%, $(generic-y))
+	@:
+
+# 对于所有的 .h 文件，使用 cmd_wrap 进行处理
+$(obj)/%.h:
+	$(call cmd,wrap)
+

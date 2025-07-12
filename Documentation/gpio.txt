@@ -1,0 +1,1014 @@
+GPIO Interfaces
+
+This provides an overview of GPIO access conventions on Linux.
+这提供了Linux上GPIO访问约定的概述。
+
+These calls use the gpio_* naming prefix.  No other calls should use that
+prefix, or the related __gpio_* prefix.
+这些调用使用gpio_*命名前缀。其他调用不应使用该前缀或相关的__gpio_*前缀。
+
+
+What is a GPIO?
+===============
+A "General Purpose Input/Output" (GPIO) is a flexible software-controlled
+digital signal.  They are provided from many kinds of chip, and are familiar
+to Linux developers working with embedded and custom hardware.  Each GPIO
+represents a bit connected to a particular pin, or "ball" on Ball Grid Array
+(BGA) packages.  Board schematics show which external hardware connects to
+which GPIOs.  Drivers can be written generically, so that board setup code
+passes such pin configuration data to drivers.
+“通用输入/输出”(GPIO)是一种灵活的软件控制数字信号。它们由多种芯片提供，对于使用
+嵌入式和定制硬件的Linux开发人员来说非常熟悉。每个GPIO代表一个位连接到一个特定的
+引脚，或球网格阵列(BGA)封装上的“球”。主板原理图显示哪些外部硬件连接到哪些gpio。
+驱动程序可以通用地编写，以便板设置代码将这些引脚配置数据传递给驱动程序。
+
+System-on-Chip (SOC) processors heavily rely on GPIOs.  In some cases, every
+non-dedicated pin can be configured as a GPIO; and most chips have at least
+several dozen of them.  Programmable logic devices (like FPGAs) can easily
+provide GPIOs; multifunction chips like power managers, and audio codecs
+often have a few such pins to help with pin scarcity on SOCs; and there are
+also "GPIO Expander" chips that connect using the I2C or SPI serial busses.
+Most PC southbridges have a few dozen GPIO-capable pins (with only the BIOS
+firmware knowing how they're used).
+片上系统(SOC)处理器严重依赖于gpio。在某些情况下，每个非专用引脚都可以配置为GPIO;
+大多数芯片至少有几十个这样的GPIO。可编程逻辑器件(如fpga)可以很容易地提供gpio;电
+源管理器等多功能芯片和音频编解码器通常有几个这样的引脚，以帮助解决soc上的引脚短
+缺问题;还有使用I2C或SPI串行总线连接的“GPIO扩展器”芯片。大多数PC南桥有几十个支持
+gpio的引脚(只有BIOS固件知道它们是如何使用的)。
+
+The exact capabilities of GPIOs vary between systems.  Common options:
+gpio的确切功能因系统而异。常见的选项:
+
+  - Output values are writable (high=1, low=0).  Some chips also have
+    options about how that value is driven, so that for example only one
+    value might be driven ... supporting "wire-OR" and similar schemes
+    for the other value (notably, "open drain" signaling).
+    输出值是可写的(high=1, low=0)。有些芯片也有关于如何驱动该值的选项，例如，可
+    能只驱动一个值……支持“wire-OR”和其他值的类似方案(特别是“open drain”信号)。
+
+  - Input values are likewise readable (1, 0).  Some chips support readback
+    of pins configured as "output", which is very useful in such "wire-OR"
+    cases (to support bidirectional signaling).  GPIO controllers may have
+    input de-glitch/debounce logic, sometimes with software controls.
+    输入值同样可读(1,0)。一些芯片支持配置为“输出”的引脚的读回，这在这种“线或”情
+    况下非常有用(支持双向信令)。GPIO控制器可能具有输入去故障/脱线逻辑，有时带有
+    软件控制。
+
+  - Inputs can often be used as IRQ signals, often edge triggered but
+    sometimes level triggered.  Such IRQs may be configurable as system
+    wakeup events, to wake the system from a low power state.
+    输入通常可以用作IRQ信号，通常是边缘触发，但有时是电平触发。这样的irq可以配置
+    为系统唤醒事件，将系统从低功耗状态唤醒。
+
+  - Usually a GPIO will be configurable as either input or output, as needed
+    by different product boards; single direction ones exist too.
+    通常，根据不同的产品板的需要，GPIO可以配置为输入或输出;单向的也存在。
+
+  - Most GPIOs can be accessed while holding spinlocks, but those accessed
+    through a serial bus normally can't.  Some systems support both types.
+    在持有自旋锁的情况下可以访问大多数gpio，但是通过串行总线访问的gpio通常不能。
+    有些系统两种类型都支持。
+
+On a given board each GPIO is used for one specific purpose like monitoring
+MMC/SD card insertion/removal, detecting card writeprotect status, driving
+a LED, configuring a transceiver, bitbanging a serial bus, poking a hardware
+watchdog, sensing a switch, and so on.
+在给定的板上，每个GPIO用于一个特定的目的，如监视MMC/SD卡的插入/移除，检测卡的写
+保护状态，驱动LED，配置收发器，串行总线，戳硬件看门狗，感应开关，等等。
+
+
+GPIO conventions
+================
+Note that this is called a "convention" because you don't need to do it this
+way, and it's no crime if you don't.  There **are** cases where portability
+is not the main issue; GPIOs are often used for the kind of board-specific
+glue logic that may even change between board revisions, and can't ever be
+used on a board that's wired differently.  Only least-common-denominator
+functionality can be very portable.  Other features are platform-specific,
+and that can be critical for glue logic.
+请注意，这被称为“惯例”，因为您不需要这样做，如果您不这样做也没有问题。在许多情况
+下，可移植性并不是主要问题;gpio通常用于特定于电路板的粘合逻辑，甚至可能在电路板
+版本之间发生变化，并且不能用于连接方式不同的电路板。只有最小公分母的功能才能非常
+便携。其他特性是特定于平台的，这对于粘合逻辑来说是至关重要的。
+
+Plus, this doesn't require any implementation framework, just an interface.
+One platform might implement it as simple inline functions accessing chip
+registers; another might implement it by delegating through abstractions
+used for several very different kinds of GPIO controller.  (There is some
+optional code supporting such an implementation strategy, described later
+in this document, but drivers acting as clients to the GPIO interface must
+not care how it's implemented.)
+另外，这不需要任何实现框架，只需要一个接口。一个平台可能将其实现为访问芯片寄存器
+的简单内联函数;另一种可能通过为几种非常不同的GPIO控制器使用抽象来实现它。(有一些
+支持这种实现策略的可选代码，将在本文后面介绍，但是作为GPIO接口客户端的驱
+动程序一定不关心它是如何实现的。)
+
+That said, if the convention is supported on their platform, drivers should
+use it when possible.  Platforms must declare GENERIC_GPIO support in their
+Kconfig (boolean true), and provide an <asm/gpio.h> file.  Drivers that can't
+work without standard GPIO calls should have Kconfig entries which depend
+on GENERIC_GPIO.  The GPIO calls are available, either as "real code" or as
+optimized-away stubs, when drivers use the include file:
+也就是说，如果他们的平台支持该约定，那么驱动开发者应该尽可能使用它。平台必须在
+Kconfig中声明GENERIC_GPIO支持(boolean true)，并提供一个<asm/gpio.h>文件。没有标
+准GPIO调用就不能工作的驱动程序应该有依赖于GENERIC_GPIO的Kconfig项。当驱动程序使
+用include文件时，GPIO调用可用，作为“实际代码”或作为优化后的存根:
+
+	#include <linux/gpio.h>
+
+If you stick to this convention then it'll be easier for other developers to
+see what your code is doing, and help maintain it.
+如果你坚持此约定，这样别的开发者理解你的代码会比较容易且可以帮助维护它。
+
+Note that these operations include I/O barriers on platforms which need to
+use them; drivers don't need to add them explicitly.
+注意：在那些需要的平台上，这些操作包括I/0操作间隔（barriers）;驱动不需要显式添加
+它们。
+
+
+Identifying GPIOs
+-----------------
+GPIOs are identified by unsigned integers in the range 0..MAX_INT.  That
+reserves "negative" numbers for other purposes like marking signals as
+"not available on this board", or indicating faults.  Code that doesn't
+touch the underlying hardware treats these integers as opaque cookies.
+GPIO使用一个无符号整型数进行标识，范围0到MAX_INT。那些保留的“negative”（负）数用
+于其他的目的，如标识信号为“在此单板上无效”，或是指出错误。那些不涉及到基本硬件操
+作的代码将这些整型数视为不透明的。
+
+Platforms define how they use those integers, and usually #define symbols
+for the GPIO lines so that board-specific setup code directly corresponds
+to the relevant schematics.  In contrast, drivers should only use GPIO
+numbers passed to them from that setup code, using platform_data to hold
+board-specific pin configuration data (along with other board specific
+data they need).  That avoids portability problems.
+平台定义了它们如何使用这些接口，并且通常为每个GPIO线使用#define宏定义符号，以便
+单板的启动代码与相关设计直接保持一致。与此相反，驱动应该只使用从setup代码传递给
+他们的GPIO号码，使用platform_data来保存单板特定的管脚配置数据（与其它所需的单板
+特定数据一起）。这避免了移植问题。
+
+So for example one platform uses numbers 32-159 for GPIOs; while another
+uses numbers 0..63 with one set of GPIO controllers, 64-79 with another
+type of GPIO controller, and on one particular board 80-95 with an FPGA.
+The numbers need not be contiguous; either of those platforms could also
+use numbers 2000-2063 to identify GPIOs in a bank of I2C GPIO expanders.
+例如：一个平台给GPIOs使用号码32-159，同时另一个使用0-63支持一个GPIO控制器集合，
+64-79支持另一个类型的GPIO控制器，且在一个特定的单板上80-95支持一个FPGA。号码不必
+是连续的，这些单板也可以使用2000-2063来标识一组用于I2CGPIO扩展.
+
+If you want to initialize a structure with an invalid GPIO number, use
+some negative number (perhaps "-EINVAL"); that will never be valid.  To
+test if such number from such a structure could reference a GPIO, you
+may use this predicate:
+如果你想要使用一个无效的GPIO号码初始化一个结构体，使用一些负数（可以为
+“-EINVAL”），它将永远不会有效。为了测试来自这样一个结构的这样一个号码是否能够引
+用一个GPIO，你需要使用：
+
+	int gpio_is_valid(int number);
+
+A number that's not valid will be rejected by calls which may request
+or free GPIOs (see below).  Other numbers may also be rejected; for
+example, a number might be valid but temporarily unused on a given board.
+一个无效的号码将被调用（可以是申请或释放GPIO）拒绝。别的号码也可能被拒绝。例如，
+一个号码可能是有效的，但在给定的单板上临时未使用。
+
+Whether a platform supports multiple GPIO controllers is a platform-specific
+implementation issue, as are whether that support can leave "holes" in the space
+of GPIO numbers, and whether new controllers can be added at runtime.  Such issues
+can affect things including whether adjacent GPIO numbers are both valid.
+平台是否支持多个GPIO控制器是平台特定实现的关键，同样是否支持GPIO号码空间的“空洞”，
+是否支持在运行时增加新控制器也是关键。这些关键会影响多个事情，包括相邻的GPIO号码
+是否都有效。
+
+Using GPIOs
+-----------
+The first thing a system should do with a GPIO is allocate it, using
+the gpio_request() call; see later.
+要使用GPIO，系统首先要分配一个GPIO，使用gpio_request() 为系统分配一个GPIO。
+
+One of the next things to do with a GPIO, often in board setup code when
+setting up a platform_device using the GPIO, is mark its direction:
+接下来要做的一件事是标示GPIO的方向，通常在使用GPIO建立一个platform_device时（位
+于单板的setup代码中）：
+
+	/* set as input or output, returning 0 or negative errno */
+	int gpio_direction_input(unsigned gpio);
+	int gpio_direction_output(unsigned gpio, int value);
+
+The return value is zero for success, else a negative errno.  It should
+be checked, since the get/set calls don't have error returns and since
+misconfiguration is possible.  You should normally issue these calls from
+a task context.  However, for spinlock-safe GPIOs it's OK to use them
+before tasking is enabled, as part of early board setup.
+返回0标示成功，或是一个负的errno错误码。它应该被检查，因为get/set调用没有错误返
+回，且可能会有错误配置。你通常应该在线程上下文中使用这些调用。虽然如此，对于
+spinlock-safe的GPIO，在tasking使能之前使用也是可以的，作为一个早期的单板建立。
+
+For output GPIOs, the value provided becomes the initial output value.
+This helps avoid signal glitching during system startup.
+对于输出GPIO，value参数提供了初始输出值。这有助于避免系统启动过程中的信号干扰。
+
+For compatibility with legacy interfaces to GPIOs, setting the direction
+of a GPIO implicitly requests that GPIO (see below) if it has not been
+requested already.  That compatibility is being removed from the optional
+gpiolib framework.
+为了与GPIO早期的接口兼容，设置一个GPIO的方向，隐性要求申请GPIO。这个兼容性从可选
+的gpiolib架构中移除了。
+
+Setting the direction can fail if the GPIO number is invalid, or when
+that particular GPIO can't be used in that mode.  It's generally a bad
+idea to rely on boot firmware to have set the direction correctly, since
+it probably wasn't validated to do more than boot Linux.  (Similarly,
+that board setup code probably needs to multiplex that pin as a GPIO,
+and configure pullups/pulldowns appropriately.)
+如果GPIO号码无效或是指定的GPIO不能使用对应模式操作的话，设置方向会失败。依靠boot
+固件设置好GPIO的方向通常不是一个好主意，因为boot的功能可能没有通过验证（除了boot
+linux）。（类似的，单板setup代码可能需要将管脚复用为一个GPIO，和配置为合适的上拉
+/下拉。）
+
+
+Spinlock-Safe GPIO access
+-------------------------
+Most GPIO controllers can be accessed with memory read/write instructions.
+Those don't need to sleep, and can safely be done from inside hard
+(nonthreaded) IRQ handlers and similar contexts.
+大多数GPIO控制器可以使用内存读写指令访问。它们不需要休眠，且可以从内部硬件中断处
+理（非线程）和类似的上下文环境安全完成。
+
+Use the following calls to access such GPIOs,
+for which gpio_cansleep() will always return false (see below):
+使用下列调用访问这些GPIO，此时gpio_cansleep将总是返回错误
+
+	/* GPIO INPUT:  return zero or nonzero */
+	int gpio_get_value(unsigned gpio);
+
+	/* GPIO OUTPUT */
+	void gpio_set_value(unsigned gpio, int value);
+
+The values are boolean, zero for low, nonzero for high.  When reading the
+value of an output pin, the value returned should be what's seen on the
+pin ... that won't always match the specified output value, because of
+issues including open-drain signaling and output latencies.
+其中，value是一个布尔型参数，零表示低，非零表示高。当读一个输出管脚的值时，返回
+的值应该是在管脚上看到的值...这并不总是与指定输出值相匹配的，因为存在开漏信号和
+输出延迟问题。
+
+The get/set calls have no error returns because "invalid GPIO" should have
+been reported earlier from gpio_direction_*().  However, note that not all
+platforms can read the value of output pins; those that can't should always
+return zero.  Also, using these calls for GPIOs that can't safely be accessed
+without sleeping (see below) is an error.
+get/set调用没有错误返回，因为“无效GPIO”应该已经由gpio_direction_*()提早报告了。
+虽然如此，并非所有的平台都可以读取输出管脚的值，那些不能读的应该总是返回零。同时，
+对那些可能导致睡眠的GPIO使用这些接口是一个错误。
+
+Platform-specific implementations are encouraged to optimize the two
+calls to access the GPIO value in cases where the GPIO number (and for
+output, value) are constant.  It's normal for them to need only a couple
+of instructions in such cases (reading or writing a hardware register),
+and not to need spinlocks.  Such optimized calls can make bitbanging
+applications a lot more efficient (in both space and time) than spending
+dozens of instructions on subroutine calls.
+平台的特定实现被鼓励优化这两个调用以获取GPIO值。在那些GPIO号码是常量的情况下，它
+们通常只需一对指令（读或写一个硬件寄存器）访问，且不需要spinlock。这样的优化可以
+使位拆分应用更有效率（在时间和空间上）（相比较于花费一堆指令在子例程调用来说）。
+
+
+GPIO access that may sleep
+--------------------------
+Some GPIO controllers must be accessed using message based busses like I2C
+or SPI.  Commands to read or write those GPIO values require waiting to
+get to the head of a queue to transmit a command and get its response.
+This requires sleeping, which can't be done from inside IRQ handlers.
+一些GPIO控制器必须使用基于消息的总线如I2C和SPI来进行访问。读写这些GPIO的命令需要
+等待到达发送队列的开始和获取它的响应。这需要休眠，且不能从内部中断处理函数中完成。
+
+Platforms that support this type of GPIO distinguish them from other GPIOs
+by returning nonzero from this call (which requires a valid GPIO number,
+which should have been previously allocated with gpio_request):
+对于这种GPIO调用gpio_cansleep接口将返回非零值（需要一个有效的GPIO号码，并已
+经提前使用gpio_request进行分配）
+
+	int gpio_cansleep(unsigned gpio);
+
+To access such GPIOs, a different set of accessors is defined:
+为了访问这些GPIO，一个不同的访问函数集被定义
+
+	/* GPIO INPUT:  return zero or nonzero, might sleep */
+	int gpio_get_value_cansleep(unsigned gpio);
+
+	/* GPIO OUTPUT, might sleep */
+	void gpio_set_value_cansleep(unsigned gpio, int value);
+
+
+Accessing such GPIOs requires a context which may sleep,  for example
+a threaded IRQ handler, and those accessors must be used instead of
+spinlock-safe accessors without the cansleep() name suffix.
+访问这样的gpio需要一个可能睡眠的上下文，例如一个线程级别中断处理程序，并且这些访
+问函数必须代替那些没有cansleep()后缀的spinlock-safe的函数。
+
+Other than the fact that these accessors might sleep, and will work
+on GPIOs that can't be accessed from hardIRQ handlers, these calls act
+the same as the spinlock-safe calls.
+除了这些访问函数可能休眠，且对那些不能从硬件中断处理函数中访问的GPIO起作用外，这
+些调用与那些spinlock-safe的调用效果一致
+
+  ** IN ADDITION ** calls to setup and configure such GPIOs must be made
+from contexts which may sleep, since they may need to access the GPIO
+controller chip too:  (These setup calls are usually made from board
+setup or driver probe/teardown code, so this is an easy constraint.)
+附加的调用（用于建立和配置这样的GPIO）必须出自可以休眠的上下文，因为它们可能需要
+访问GPIO控制器芯片：（这些setup调用经常出自单板setup或是驱动probe/teardown(拆卸)
+代码，所以这是一个简单（无关紧要）的限制。）
+
+	gpio_direction_input()
+	gpio_direction_output()
+	gpio_request()
+
+## 	gpio_request_one()
+##	gpio_request_array()
+## 	gpio_free_array()
+
+	gpio_free()
+	gpio_set_debounce()
+
+
+
+Claiming and Releasing GPIOs
+----------------------------
+To help catch system configuration errors, two calls are defined.
+为了捕获系统配置错误，定义了两个调用
+
+	/* request GPIO, returning 0 or negative errno.
+	 * non-null labels may be useful for diagnostics.
+	 */
+	int gpio_request(unsigned gpio, const char *label);
+
+	/* release previously-claimed GPIO */
+	void gpio_free(unsigned gpio);
+
+Passing invalid GPIO numbers to gpio_request() will fail, as will requesting
+GPIOs that have already been claimed with that call.  The return value of
+gpio_request() must be checked.  You should normally issue these calls from
+a task context.  However, for spinlock-safe GPIOs it's OK to request GPIOs
+before tasking is enabled, as part of early board setup.
+错误的GPIO号会导致gpio_request()失败，同样申请一个已经被主张的也会出错。
+gpio_request()的返回值必须被检查。通常应该在一个任务上下文中调用此函数，虽然如此，
+对于spinlock-safe GPIO来讲，在使能tasking之前申请GPIO是可以的（作为早期单板setup
+的一部分）。
+
+These calls serve two basic purposes.  One is marking the signals which
+are actually in use as GPIOs, for better diagnostics; systems may have
+several hundred potential GPIOs, but often only a dozen are used on any
+given board.  Another is to catch conflicts, identifying errors when
+(a) two or more drivers wrongly think they have exclusive use of that
+signal, or (b) something wrongly believes it's safe to remove drivers
+needed to manage a signal that's in active use.  That is, requesting a
+GPIO can serve as a kind of lock.
+这些调用服务于两个基本目的。一个是为了诊断目的标识实际使用GPIO的信号，系统可能有
+几百个GPIO，但在一个给定的单板上常常只有几组处于使用状态。另一个是为了捕获冲突、
+标示错误。当两个或多个驱动错误地认为它们独占此信号或是一些东西错误的认为移除驱动
+是安全的，这时需要管理一个信号用于管理活动状态。既是说，申请一个GPIO的过程可以为
+这种锁服务。
+
+Some platforms may also use knowledge about what GPIOs are active for
+power management, such as by powering down unused chip sectors and, more
+easily, gating off unused clocks.
+一些平台也使用GPIO用于功耗管理，如关掉不使用的芯片部分和更简单的门控不使用的时钟。
+For GPIOs that use pins known to the pinctrl subsystem, that subsystem should
+be informed of their use; a gpiolib driver's .request() operation may call
+pinctrl_request_gpio(), and a gpiolib driver's .free() operation may call
+pinctrl_free_gpio(). The pinctrl subsystem allows a pinctrl_request_gpio()
+to succeed concurrently with a pin or pingroup being "owned" by a device for
+pin multiplexing.
+对于那些使用pinctrl子系统的管脚的GPIO，子系统应该被通知它们的用途。一个gpiolib驱
+动的.request()操作可能调用pinctrl_request_gpio()，且一个gpiolib驱动的.free()操作
+可能调用pinctrl_free_gpio()。pinctrl子系统允许一个pinctrl_request_gpio()在一个管
+脚或是管脚组被一个设备拥有时成功，为了复用目的。
+
+Any programming of pin multiplexing hardware that is needed to route the
+GPIO signal to the appropriate pin should occur within a GPIO driver's
+.direction_input() or .direction_output() operations, and occur after any
+setup of an output GPIO's value. This allows a glitch-free migration from a
+pin's special function to GPIO. This is sometimes required when using a GPIO
+to implement a workaround on signals typically driven by a non-GPIO HW block.
+任意支持管脚复用硬件的编程需要路由GPIO信号到适当的管脚。这些应该在一个GPIO驱动的
+.direction_input()或是.direction_output()操作中发生，且发生在任意一个输出GPIO值
+setup之后。这允许从一个管脚的特殊功能到GPIO的无障碍集成。当使用一个GPIO来实现一
+个关于一个非GPIO硬件模块驱动一个典型信号的工作区（变通方案）时，这时常会被需求。
+
+Some platforms allow some or all GPIO signals to be routed to different pins.
+Similarly, other aspects of the GPIO or pin may need to be configured, such as
+pullup/pulldown. Platform software should arrange that any such details are
+configured prior to gpio_request() being called for those GPIOs, e.g. using
+the pinctrl subsystem's mapping table, so that GPIO users need not be aware
+of these details.
+一些平台允许一些或所有的GPIO信号被路由到不同的管脚。同样的，GPIO或管脚的别的方面
+可能需要配置，如上来/下拉。平台软件应该安排所有的这些细节优先于gpio_request()之
+前配置。例如，使用pinctrl子系统的映射表，这样GPIO使用者就不需要知道那些细节。
+
+Also note that it's your responsibility to have stopped using a GPIO
+before you free it.
+同样注意：在你释放GPIO之前需要停止使用它。
+
+Considering in most cases GPIOs are actually configured right after they
+are claimed, three additional calls are defined:
+考虑到大多数场景中GPIO在它们被声明后实际已经被正确配置，定义了3各附加的调用：
+
+	/* request a single GPIO, with initial configuration specified by
+	 * 'flags', identical to gpio_request() wrt other arguments and
+	 * return value
+	 */
+	int gpio_request_one(unsigned gpio, unsigned long flags, const char *label);
+
+	/* request multiple GPIOs in a single call
+	 */
+	int gpio_request_array(struct gpio *array, size_t num);
+
+	/* release multiple GPIOs in a single call
+	 */
+	void gpio_free_array(struct gpio *array, size_t num);
+
+where 'flags' is currently defined to specify the following properties:
+其中，flags参数当前可以指定为下列属性：
+
+	* GPIOF_DIR_IN		- to configure direction as input
+	* GPIOF_DIR_OUT		- to configure direction as output
+
+	* GPIOF_INIT_LOW	- as output, set initial level to LOW
+	* GPIOF_INIT_HIGH	- as output, set initial level to HIGH
+	* GPIOF_OPEN_DRAIN	- gpio pin is open drain type.
+	* GPIOF_OPEN_SOURCE	- gpio pin is open source type.
+
+	* GPIOF_EXPORT_DIR_FIXED	- export gpio to sysfs, keep direction
+	* GPIOF_EXPORT_DIR_CHANGEABLE	- also export, allow changing direction
+
+since GPIOF_INIT_* are only valid when configured as output, so group valid
+combinations as:
+由于GPIOF_INIT_*仅仅当配置为输出时有效，所以有效组合为
+
+	* GPIOF_IN		- configure as input
+	* GPIOF_OUT_INIT_LOW	- configured as output, initial level LOW
+	* GPIOF_OUT_INIT_HIGH	- configured as output, initial level HIGH
+
+When setting the flag as GPIOF_OPEN_DRAIN then it will assume that pins is
+open drain type. Such pins will not be driven to 1 in output mode. It is
+require to connect pull-up on such pins. By enabling this flag, gpio lib will
+make the direction to input when it is asked to set value of 1 in output mode
+to make the pin HIGH. The pin is make to LOW by driving value 0 in output mode.
+
+When setting the flag as GPIOF_OPEN_SOURCE then it will assume that pins is
+open source type. Such pins will not be driven to 0 in output mode. It is
+require to connect pull-down on such pin. By enabling this flag, gpio lib will
+make the direction to input when it is asked to set value of 0 in output mode
+to make the pin LOW. The pin is make to HIGH by driving value 1 in output mode.
+
+In the future, these flags can be extended to support more properties.
+
+Further more, to ease the claim/release of multiple GPIOs, 'struct gpio' is
+introduced to encapsulate all three fields as:
+此外，为了简化多个GPIO的声明/释放，引入了gpio结构来压缩这3个域
+
+	struct gpio {
+		unsigned	gpio;
+		unsigned long	flags;
+		const char	*label;
+	};
+
+A typical example of usage:
+
+	static struct gpio leds_gpios[] = {
+		{ 32, GPIOF_OUT_INIT_HIGH, "Power LED" }, /* default to ON */
+		{ 33, GPIOF_OUT_INIT_LOW,  "Green LED" }, /* default to OFF */
+		{ 34, GPIOF_OUT_INIT_LOW,  "Red LED"   }, /* default to OFF */
+		{ 35, GPIOF_OUT_INIT_LOW,  "Blue LED"  }, /* default to OFF */
+		{ ... },
+	};
+
+	err = gpio_request_one(31, GPIOF_IN, "Reset Button");
+	if (err)
+		...
+
+	err = gpio_request_array(leds_gpios, ARRAY_SIZE(leds_gpios));
+	if (err)
+		...
+
+	gpio_free_array(leds_gpios, ARRAY_SIZE(leds_gpios));
+
+
+GPIOs mapped to IRQs
+--------------------
+GPIO numbers are unsigned integers; so are IRQ numbers.  These make up
+two logically distinct namespaces (GPIO 0 need not use IRQ 0).  You can
+map between them using calls like:
+GPIO号码是无符号整型数，同样中断号码也是这样。这些构成了两个逻辑区别的名字空间
+（GPIO0无须对应使用中断0）。你可以在它们之间使用以下调用进行映射：
+
+	/* map GPIO numbers to IRQ numbers */
+	int gpio_to_irq(unsigned gpio);
+
+	/* map IRQ numbers to GPIO numbers (avoid using this) */
+	int irq_to_gpio(unsigned irq);
+
+Those return either the corresponding number in the other namespace, or
+else a negative errno code if the mapping can't be done.  (For example,
+some GPIOs can't be used as IRQs.)  It is an unchecked error to use a GPIO
+number that wasn't set up as an input using gpio_direction_input(), or
+to use an IRQ number that didn't originally come from gpio_to_irq().
+它们返回一个对应名字空间的对应号码，或者如果映射不能完成的话返回错误。（例如：一
+些GPIO不能用于中断。）使用一个未setup的GPIO号码作为输出调用gpio_direction_input()
+或是使用一个不是来源于gpio_to_irq()的中断号是一个未核对的错误，
+
+These two mapping calls are expected to cost on the order of a single
+addition or subtraction.  They're not allowed to sleep.
+这两个映射调用会在单个增加或减少上有耗费。它们不能休眠。
+
+Non-error values returned from gpio_to_irq() can be passed to request_irq()
+or free_irq().  They will often be stored into IRQ resources for platform
+devices, by the board-specific initialization code.  Note that IRQ trigger
+options are part of the IRQ interface, e.g. IRQF_TRIGGER_FALLING, as are
+system wakeup capabilities.
+gpio_to_irq()的返回值（非错误）可以传递给request_irq()或free_irq()。它们经常被保
+存到对应platform设备的IRQ resource中，这使用单板特定的初始化函数完成。注意，中断
+触发选项是中断接口的一部分，例如IRQF_TRIGGER_FALLING，作为系统唤醒能力。
+
+Non-error values returned from irq_to_gpio() would most commonly be used
+with gpio_get_value(), for example to initialize or update driver state
+when the IRQ is edge-triggered.  Note that some platforms don't support
+this reverse mapping, so you should avoid using it.
+irq_to_gpio()的返回值（非错误）通常用于gpio_get_value()，例如，为了在中断被边沿
+触发时 初始化和更新驱动状态。注意，一些platform不支持反转映射，所以你应该避免使
+用它。
+
+
+Emulating Open Drain Signals
+仿真开漏信号
+----------------------------
+Sometimes shared signals need to use "open drain" signaling, where only the
+low signal level is actually driven.  (That term applies to CMOS transistors;
+"open collector" is used for TTL.)  A pullup resistor causes the high signal
+level.  This is sometimes called a "wire-AND"; or more practically, from the
+negative logic (low=true) perspective this is a "wire-OR".
+有时共享信号需要使用开漏信号，它只有低信号电平是实际驱动的。（此术语用于COMS晶体
+管,开集电极用于TTL。）一个上拉电阻引出高电平信号。这有时称为“线与”，或是事实上更
+多的，来自负逻辑观点（low=true）这是一个“线或”。
+
+One common example of an open drain signal is a shared active-low IRQ line.
+Also, bidirectional data bus signals sometimes use open drain signals.
+一个常见的开漏信号的例子是一个共享的低电平激活中断线。同样，双向数据总线信号有时
+也使用开漏信号
+
+Some GPIO controllers directly support open drain outputs; many don't.  When
+you need open drain signaling but your hardware doesn't directly support it,
+there's a common idiom you can use to emulate it with any GPIO pin that can
+be used as either an input or an output:
+一些GPIO控制器直接支持开漏输出，更多的不支持。当你需要开漏信号但你的硬件不直接支
+持时，一个常见的方法你可以使用任意的即可用于输入也可以用于输出的GPIO来模拟它
+
+ LOW:	gpio_direction_output(gpio, 0) ... this drives the signal
+	and overrides the pullup.
+
+ HIGH:	gpio_direction_input(gpio) ... this turns off the output,
+	so the pullup (or some other device) controls the signal.
+
+If you are "driving" the signal high but gpio_get_value(gpio) reports a low
+value (after the appropriate rise time passes), you know some other component
+is driving the shared signal low.  That's not necessarily an error.  As one
+common example, that's how I2C clocks are stretched:  a slave that needs a
+slower clock delays the rising edge of SCK, and the I2C master adjusts its
+signaling rate accordingly.
+如果你正在驱动信号为高，但是 gpio_get_value(gpio)报告了一个低值（经过适当的上升
+时间准备），你应该知道可能是某些别的部件驱动了这个共享信号为低。这是不必要的错误。
+作为一个常见的例子，这是I2C时钟拉伸的方式：一个从部件需要一个低速时钟延迟了SCK的
+上升沿们，且I2C主设备因此调整了它的信号频率。
+
+
+What do these conventions omit?
+这些约定节省了什么？
+===============================
+One of the biggest things these conventions omit is pin multiplexing, since
+this is highly chip-specific and nonportable.  One platform might not need
+explicit multiplexing; another might have just two options for use of any
+given pin; another might have eight options per pin; another might be able
+to route a given GPIO to any one of several pins.  (Yes, those examples all
+come from systems that run Linux today.)
+这些约定节省的一个大方面是关于管脚复用，因为这是高度芯片相关且不可移植的。一个平
+台可能不需要显式的管脚复用，另一个可能只有两个选项用于任意给定的管脚，另一个可能
+每个管脚有八个选择，一个可能能够路由一个给定的GPIO到多个管脚中的一个。（是的，这
+些例子在今天的linux上都可以找到）
+
+Related to multiplexing is configuration and enabling of the pullups or
+pulldowns integrated on some platforms.  Not all platforms support them,
+or support them in the same way; and any given board might use external
+pullups (or pulldowns) so that the on-chip ones should not be used.
+(When a circuit needs 5 kOhm, on-chip 100 kOhm resistors won't do.)
+Likewise drive strength (2 mA vs 20 mA) and voltage (1.8V vs 3.3V) is a
+platform-specific issue, as are models like (not) having a one-to-one
+correspondence between configurable pins and GPIOs.
+在一些平台上配置和上拉/下拉的使能与多路复用相关。并不是所有的平台都支持或是以同
+样的方式支持它们，任意一个给定的单板可能使用外部上拉（或下拉）以便片上ons不能被
+使用。（当一个电路需要5千欧姆，片上的100K欧姆电阻不能作用。）同样的，驱动能力
+（2mA 对 20mA）和电压（1.8V 对 3.3V）是平台特定的，与模型一样在配置的管脚和GPIO
+之间一一对应
+
+There are other system-specific mechanisms that are not specified here,
+like the aforementioned options for input de-glitching and wire-OR output.
+Hardware may support reading or writing GPIOs in gangs, but that's usually
+configuration dependent:  for GPIOs sharing the same bank.  (GPIOs are
+commonly grouped in banks of 16 or 32, with a given SOC having several such
+banks.)  Some systems can trigger IRQs from output GPIOs, or read values
+from pins not managed as GPIOs.  Code relying on such mechanisms will
+necessarily be nonportable.
+还有别的系统特定的机制此处并没有提到，如上文提及的抗干扰和线或输出。
+硬件可能按组读写GPIO，但是那通常是单独配置的：对于那些共享同一个bank的GPIO。
+（GPIO通常16或32个为一组，一个给定的SOC系统一般拥有几个这样的BANK。）
+一些系统可以从输出GPIO管脚触发中断，或是从一个没作为GPIO管理的管脚上读值。依赖于
+这种机制的代码将是不可移植的。
+
+Dynamic definition of GPIOs is not currently standard; for example, as
+a side effect of configuring an add-on board with some GPIO expanders.
+GPIO动态定义并不是当前的标准，例如，作为配置一个单板附加的GPIO扩展器的边界效应。
+
+
+GPIO implementor's framework (OPTIONAL)
+GPIO系统结构（可选）
+=======================================
+As noted earlier, there is an optional implementation framework making it
+easier for platforms to support different kinds of GPIO controller using
+the same programming interface.  This framework is called "gpiolib".
+如前面提醒的一样，一个可选的实现结构使得平台支持不同种类的GPIO控制器使用同一个编
+程接口变得简单。这个结构称为gpiolib。
+
+As a debugging aid, if debugfs is available a /sys/kernel/debug/gpio file
+will be found there.  That will list all the controllers registered through
+this framework, and the state of the GPIOs currently in use.
+作为一个调试目的，如果debugfs有效，一个/sys/kernel/debug/gpio文件在那里将被找到。
+它列出了所有的通过这个结构注册的GPIO控制器，和GPIO当前的使用状态。
+
+
+Controller Drivers: gpio_chip
+控制器驱动：gpio_chip
+-----------------------------
+In this framework each GPIO controller is packaged as a "struct gpio_chip"
+with information common to each controller of that type:
+在这个架构中，每个GPIO控制器被封装为一个“gpio_chip”结构体，此结构体中包含了每个
+控制器的通用信息：
+
+ - methods to establish GPIO direction
+ --确定GPIO方向的方法
+ - methods used to access GPIO values
+ --存取GPIO值的方法
+ - flag saying whether calls to its methods may sleep
+ --声明方法是否休眠的flag
+ - optional debugfs dump method (showing extra state like pullup config)
+ --可选的debugfs dump方法（展现附加的状态如上拉配置等）
+ - label for diagnostics
+ --用于诊断目的的标签
+
+There is also per-instance data, which may come from device.platform_data:
+the number of its first GPIO, and how many GPIOs it exposes.
+每个实例也有自己的私有数据，可能来自device.platform_data：它的第一个GPIO和它暴露
+几个GPIO.
+
+The code implementing a gpio_chip should support multiple instances of the
+controller, possibly using the driver model.  That code will configure each
+gpio_chip and issue gpiochip_add().  Removing a GPIO controller should be
+rare; use gpiochip_remove() when it is unavoidable.
+实现一个gpio_chip的代码应该支持多个控制器的实例，可能使用驱动模型。代码会配置每
+个gpio_chip并且执行gpiochip_add()。移除一个GPIO控制器是少见的，使用gpio_remove()
+移除一个不再有效的GPIO控制器。
+
+Most often a gpio_chip is part of an instance-specific structure with state
+not exposed by the GPIO interfaces, such as addressing, power management,
+and more.  Chips such as codecs will have complex non-GPIO state.
+大多数时候，一个gpio_chip是一个实例独有的结构，它的一些状态值不暴露给GPIO接口，
+如编址、电源管理等等。编码解码器之类的芯片会有复杂的非GPIO状态。
+
+Any debugfs dump method should normally ignore signals which haven't been
+requested as GPIOs.  They can use gpiochip_is_requested(), which returns
+either NULL or the label associated with that GPIO when it was requested.
+所有的debugfs dump 方式通常应该忽略那些未作为GPIO请求的信号。他们可以使用
+gpiochip_is_requested(),此函数返回与GPIO相关的label或是NULL。
+
+
+Platform Support
+平台支持
+----------------
+To support this framework, a platform's Kconfig will "select" either
+ARCH_REQUIRE_GPIOLIB or ARCH_WANT_OPTIONAL_GPIOLIB
+and arrange that its <asm/gpio.h> includes <asm-generic/gpio.h> and defines
+three functions: gpio_get_value(), gpio_set_value(), and gpio_cansleep().
+为了支持这个结构，一个平台的Kconfig需要选择ARCH_REQUIRE_GPIOLIB或是
+ARCH_WANT_OPTIONAL_GPIOLIB之一，且安排的它的<asm/gpio.h>包含<asm-generic/gpio.h>
+并且定义3个函数gpio_get_value(), gpio_set_value(), 和 gpio_cansleep()。
+
+It may also provide a custom value for ARCH_NR_GPIOS, so that it better
+reflects the number of GPIOs in actual use on that platform, without
+wasting static table space.  (It should count both built-in/SoC GPIOs and
+also ones on GPIO expanders.
+他也可以提供一个自定义的值：ARCH_NR_GPIOS，以便能更好的反映平台实际使用的GPIO数
+目，并不浪费静态区域空间。（它应该计数 内建/SOC GPIO和GPIO扩展器扩展的数目）
+
+ARCH_REQUIRE_GPIOLIB means that the gpiolib code will always get compiled
+into the kernel on that architecture.
+ARCH_REQUIRE_GPIOLIB意味着此平台上gpiolib代码将永久编译进内核
+
+ARCH_WANT_OPTIONAL_GPIOLIB means the gpiolib code defaults to off and the user
+can enable it and build it into the kernel optionally.
+ARCH_WANT_OPTIONAL_GPIOLIB意味着gpiolib代码默认是关闭的，用于可以使能它并且将它
+可选的编译进内核。
+
+If neither of these options are selected, the platform does not support
+GPIOs through GPIO-lib and the code cannot be enabled by the user.
+如果这些选项都未被选上，平台不能通过GPIO-lib支持GPIO，这些代码也不能被用户使能。
+
+Trivial implementations of those functions can directly use framework
+code, which always dispatches through the gpio_chip:
+那些函数琐细的实现可以直接使用架构代码，它们经常通过gpio_chip分配：
+
+  #define gpio_get_value	__gpio_get_value
+  #define gpio_set_value	__gpio_set_value
+  #define gpio_cansleep		__gpio_cansleep
+
+Fancier implementations could instead define those as inline functions with
+logic optimizing access to specific SOC-based GPIOs.  For example, if the
+referenced GPIO is the constant "12", getting or setting its value could
+cost as little as two or three instructions, never sleeping.  When such an
+optimization is not possible those calls must delegate to the framework
+code, costing at least a few dozen instructions.  For bitbanged I/O, such
+instruction savings can be significant.
+爱好者实现可以代替定义他们使用内联函数，使用逻辑优化存取特定的基于SOC的GPIO。例
+如，如果 引用的GPIO是常数“12”，getting或setting它的值可能只需要2个或3个指令，且
+从不休眠。如果这样一个优化是不可能的话，这些调用实现必须委托给架构代码，它会耗费
+至少几十个指令。为了位拆型I/O，这些指令的节约是有相当大的意义的。
+
+For SOCs, platform-specific code defines and registers gpio_chip instances
+for each bank of on-chip GPIOs.  Those GPIOs should be numbered/labeled to
+match chip vendor documentation, and directly match board schematics.  They
+may well start at zero and go up to a platform-specific limit.  Such GPIOs
+are normally integrated into platform initialization to make them always be
+available, from arch_initcall() or earlier; they can often serve as IRQs.
+对于SOC来说，平台特定的代码为每个bank的片上GPIO定义和注册了gpio_chip实例。那些
+GPIO应该被编号和打上标签以匹配芯片厂商文档，且直接匹配单板设计图。他们可以从零开
+始一直到平台特定的限制。这些GPIO通常集成到单板初始化过程中以使得它们总是有效的，
+从arch_initcall()到更早，它们总是可以为中断服务。
+
+
+Board Support
+板级支持
+-------------
+For external GPIO controllers -- such as I2C or SPI expanders, ASICs, multi
+function devices, FPGAs or CPLDs -- most often board-specific code handles
+registering controller devices and ensures that their drivers know what GPIO
+numbers to use with gpiochip_add().  Their numbers often start right after
+platform-specific GPIOs.
+对于外部GPIO控制器（如I2C或SPI扩展）、ASIC、多功能器件、FPGA或是CPLD，通常单板私
+有代码例程注册控制器器件且确定它们的驱动使用什么GPIO号来调用gpiochip_add。它们的
+号码经常在平台特定GPIO之后开始。
+
+For example, board setup code could create structures identifying the range
+of GPIOs that chip will expose, and passes them to each GPIO expander chip
+using platform_data.  Then the chip driver's probe() routine could pass that
+data to gpiochip_add().
+例如，单板setup代码可以创建结构标示芯片想要暴露的GPIO的范围，且使用platform_data
+传递它们到每个GPIO扩展器芯片。这样芯片驱动的probe()历程可以传递这些数据到
+gpiochip_add()。
+
+Initialization order can be important.  For example, when a device relies on
+an I2C-based GPIO, its probe() routine should only be called after that GPIO
+becomes available.  That may mean the device should not be registered until
+calls for that GPIO can work.  One way to address such dependencies is for
+such gpio_chip controllers to provide setup() and teardown() callbacks to
+board specific code; those board specific callbacks would register devices
+once all the necessary resources are available, and remove them later when
+the GPIO controller device becomes unavailable.
+初始化顺序是很重要的。例如当一个依赖于基于I2C的GPIO的设备，它的probe()例程应该仅
+能在GPIO有效后调用。这意味着设备不能在GPIO可以工作之前注册。一个解决这样依赖的方
+法是在板级特定代码中，对于这种gpio_chip控制器来提供setup()和teardown()回调，这些
+板级特定的回调将注册设备一旦所有的需要资源有效时，并且在GPIO控制器无效时将它们移
+除。
+
+
+Sysfs Interface for Userspace (OPTIONAL)
+用户空间的Sysfs接口（可选）
+========================================
+Platforms which use the "gpiolib" implementors framework may choose to
+configure a sysfs user interface to GPIOs.  This is different from the
+debugfs interface, since it provides control over GPIO direction and
+value instead of just showing a gpio state summary.  Plus, it could be
+present on production systems without debugging support.
+使用gpiolib实现结构的平台可以选择为GPIO配置一个sysfs用户接口。这与debugfs接口不
+同，因为它提供了覆盖GPIO方向和值的控制而不只是显示一个gpio状态信息摘要。另外，它
+可以在产品系统中提供而不需要调试支持。
+
+Given appropriate hardware documentation for the system, userspace could
+know for example that GPIO #23 controls the write protect line used to
+protect boot loader segments in flash memory.  System upgrade procedures
+may need to temporarily remove that protection, first importing a GPIO,
+then changing its output state, then updating the code before re-enabling
+the write protection.  In normal use, GPIO #23 would never be touched,
+and the kernel would have no need to know about it.
+为系统给出对应的硬件文档，用户空间可以知道例如GPIO#23控制着保护线，用于保护flash
+中的boot区域。系统升级程序可能需要临时移除这个保护，首先引入一个GPIO，然后改变它
+的输出状态，接下来在重新使能写保护之前升级代码。通常用法中，GPIO#23将不会被触碰，
+并且内核也不需知道它的信息。
+
+Again depending on appropriate hardware documentation, on some systems
+userspace GPIO can be used to determine system configuration data that
+standard kernels won't know about.  And for some tasks, simple userspace
+GPIO drivers could be all that the system really needs.
+同样依靠一个合适的硬件文档，在一些系统用户空间，GPIO可以被用于决定那些内核并不关
+心的系统配置数据。对于一些任务，简单用户空间GPIO驱动是系统真正需要的
+
+Note that standard kernel drivers exist for common "LEDs and Buttons"
+GPIO tasks:  "leds-gpio" and "gpio_keys", respectively.  Use those
+instead of talking directly to the GPIOs; they integrate with kernel
+frameworks better than your userspace code could.
+注意，针对通用“LED和按钮”的标准内核驱动存在对应的GPIO任务“leds-gpio”和
+“gpio-keys”。使用它们代替直接与GPIO通话，它们集成在内核架构比你的用户态代码可能
+更好。
+
+
+Paths in Sysfs
+Sysfs路径
+--------------
+There are three kinds of entry in /sys/class/gpio:
+/sys/class/gpio有3个入口条目：
+
+   -	Control interfaces used to get userspace control over GPIOs;
+   - 控制接口用于用户空间获取GPIO控制
+
+   -	GPIOs themselves; and
+   - GPIO自己
+
+   -	GPIO controllers ("gpio_chip" instances).
+   - GPIO控制器（“gpio_chip”实例）
+
+That's in addition to standard files including the "device" symlink.
+这是对于标准文件的补充，包括“device”符号
+
+The control interfaces are write-only:
+控制接口是只写的：
+
+    /sys/class/gpio/
+
+    	"export" ... Userspace may ask the kernel to export control of
+		a GPIO to userspace by writing its number to this file.
+        通过写GPIO的号码到此文件，用户空间可以要求内核导出一个GPIO的控制到用户空
+        间
+
+		Example:  "echo 19 > export" will create a "gpio19" node
+		for GPIO #19, if that's not requested by kernel code.
+        例如：“echo 19 > export”将创建一个GPIO #19的“gpio19”节点（假设内核代码未
+        申请此GPIO号）。
+
+    	"unexport" ... Reverses the effect of exporting to userspace.
+        与“export”效果相反
+
+		Example:  "echo 19 > unexport" will remove a "gpio19"
+		node exported using the "export" file.
+        例如："echo 19 > unexport"将移除一个由“export”文件导出的“gpio19”节点。
+
+GPIO signals have paths like /sys/class/gpio/gpio42/ (for GPIO #42)
+and have the following read/write attributes:
+GPIO信号拥有如/sys/class/gpio/gpio42/（对应于GPIO#42）的路径，并且具有下列读写属
+性：
+
+    /sys/class/gpio/gpioN/
+
+	"direction" ... reads as either "in" or "out".  This value may
+		normally be written.  Writing as "out" defaults to
+		initializing the value as low.  To ensure glitch free
+		operation, values "low" and "high" may be written to
+		configure the GPIO as an output with that initial value.
+        “direction”————读为“in”或是“out”。这个值通常可写。写“out”默认初始化此值
+        为低。为了确定无障碍操作，值“low”和“high”可以被写入以配置GPIO的输出初始
+        化值。
+
+		Note that this attribute *will not exist* if the kernel
+		doesn't support changing the direction of a GPIO, or
+		it was exported by kernel code that didn't explicitly
+		allow userspace to reconfigure this GPIO's direction.
+        注意这个属性“将不存在”如果内核不支持改变一个GPIO的方向，或者它不能被内核
+        代码导出（不能显式的允许用户空间来重新配置GPIO的选项。）
+
+	"value" ... reads as either 0 (low) or 1 (high).  If the GPIO
+		is configured as an output, this value may be written;
+		any nonzero value is treated as high.
+        读作“0”（低）或“1”（高）。如果GPIO被配置为一个输出，这个值可写;任何非零
+        值均被视为高。
+
+		If the pin can be configured as interrupt-generating interrupt
+		and if it has been configured to generate interrupts (see the
+		description of "edge"), you can poll(2) on that file and
+		poll(2) will return whenever the interrupt was triggered. If
+		you use poll(2), set the events POLLPRI and POLLERR. If you
+		use select(2), set the file descriptor in exceptfds. After
+		poll(2) returns, either lseek(2) to the beginning of the sysfs
+		file and read the new value or close the file and re-open it
+		to read the value.
+        如果管脚可以被配置为中断产生中断管脚，且如果它已经被配置为产生中断（参考
+        “edge”描述），你可以poll（2）此文件并且当中断触发时poll（2）将返回。如果
+        你使用了poll（2），设置POLLPRI和POLLERR事件。如果你使用select（2），在
+        exceptfds中设置文件描述符。在poll（2）返回之后，有两个选择一是lseek（2）
+        到sysfs文件的开始且读新的值，另一个是关闭文件且重打开它来读取新的值。
+        （为何这样设置？）
+
+	"edge" ... reads as either "none", "rising", "falling", or
+		"both". Write these strings to select the signal edge(s)
+		that will make poll(2) on the "value" file return.
+        读作“none”、“rising”、“falling”或是“both”。写这些字符串以选择边沿信号，
+        他将使得“value”文件上的poll（2）操作返回。
+        这个文件只在管脚可以配置为中断产生输入管脚时存在。
+
+		This file exists only if the pin can be configured as an
+		interrupt generating input pin.
+        这个文件只在管脚可以配置为中断产生输入管脚时存在。
+
+	"active_low" ... reads as either 0 (false) or 1 (true).  Write
+		any nonzero value to invert the value attribute both
+		for reading and writing.  Existing and subsequent
+		poll(2) support configuration via the edge attribute
+		for "rising" and "falling" edges will follow this
+		setting.
+        读为0（false）或1（true）。写任何非零值都会反转读或写的值。目前和后来的
+        poll（2）支持经由edge属性配置为“rising”或“falling”上升沿或下降沿将遵循这
+        个设置。
+
+GPIO controllers have paths like /sys/class/gpio/gpiochip42/ (for the
+controller implementing GPIOs starting at #42) and have the following
+read-only attributes:
+GPIO控制器具有如/sys/class/gpio/gpiochip42/（针对控制器，实现GPIO开始于#42）的路
+径，且具有下列只读属性：
+
+    /sys/class/gpio/gpiochipN/
+
+    	"base" ... same as N, the first GPIO managed by this chip
+        与N相等，是第一个被此芯片管理的GPIO
+
+    	"label" ... provided for diagnostics (not always unique)
+        提供用于诊断（并不总是独一无二的）
+
+    	"ngpio" ... how many GPIOs this manges (N to N + ngpio - 1)
+        管理的GPIO数（N到N+ngpio-1）
+
+Board documentation should in most cases cover what GPIOs are used for
+what purposes.  However, those numbers are not always stable; GPIOs on
+a daughtercard might be different depending on the base board being used,
+or other cards in the stack.  In such cases, you may need to use the
+gpiochip nodes (possibly in conjunction with schematics) to determine
+the correct GPIO number to use for a given signal.
+大多数情况下，单板文档应该提供GPIO的使用目的。虽然如此这些号码并非总是固定的，一
+个子板上的GPIO可能与基础板使用的不同。此种情况下，你可能需要使用gpiochip节点（可
+能与设计结合）来为每个信号决定正确的GPIO号码。
+
+
+Exporting from Kernel code
+从内核代码中导出
+--------------------------
+Kernel code can explicitly manage exports of GPIOs which have already been
+requested using gpio_request():
+内核代码可以显式管理那些使用gpio_request()申请的GPIO的导出
+
+	/* export the GPIO to userspace */
+	int gpio_export(unsigned gpio, bool direction_may_change);
+
+	/* reverse gpio_export() */
+	void gpio_unexport();
+
+	/* create a sysfs link to an exported GPIO node */
+	int gpio_export_link(struct device *dev, const char *name,
+		unsigned gpio)
+
+	/* change the polarity of a GPIO node in sysfs */
+	int gpio_sysfs_set_active_low(unsigned gpio, int value);
+
+After a kernel driver requests a GPIO, it may only be made available in
+the sysfs interface by gpio_export().  The driver can control whether the
+signal direction may change.  This helps drivers prevent userspace code
+from accidentally clobbering important system state.
+一个内核驱动申请一个GPIO后，它可以使用gpio_export()使得sysfs接口有效。驱动可以控
+制信号方向是否可以改变。这使得驱动可以防止用户空间代码不小心冲击重要的系统状态。
+
+This explicit exporting can help with debugging (by making some kinds
+of experiments easier), or can provide an always-there interface that's
+suitable for documenting as part of a board support package.
+明确的exporting有助于调试（使得一些实验更简单），或是提供一个总是可以使用的接口，
+适合于bsp文档。
+
+After the GPIO has been exported, gpio_export_link() allows creating
+symlinks from elsewhere in sysfs to the GPIO sysfs node.  Drivers can
+use this to provide the interface under their own device in sysfs with
+a descriptive name.
+GPIO被导出后，gpio_export_link()允许在sysfs的任何地方创建GPIO sysfs节点的符号链
+接。驱动可以用此在它们自己设备sysfs目录下提供指定名字的接口（链接到GPIO节点）
+
+Drivers can use gpio_sysfs_set_active_low() to hide GPIO line polarity
+differences between boards from user space.  This only affects the
+sysfs interface.  Polarity change can be done both before and after
+gpio_export(), and previously enabled poll(2) support for either
+rising or falling edge will be reconfigured to follow this setting.
+驱动可以使用gpio_sysfs_set_active_low()隐藏GPIO在用户空间和单板之间的线极性不同。
+这仅影响sysfs接口。极性变换可以在gpio_export()之前和之后完成，并且前面使能的
+poll(2) （支持上升沿或下降沿事件）将被重新配置为遵循此设置。
+
